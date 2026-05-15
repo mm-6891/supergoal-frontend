@@ -1,0 +1,7 @@
+[gd_scene format=3 godot_version="4.6.2"]
+
+[ext_resource type="Script" path="res://scripts/ui/player_card.gd" id="1_card"]
+
+[node name="PlayerCard" type="Control"]
+custom_minimum_size = Vector2(260, 400)
+script = ExtResource("1_card")
