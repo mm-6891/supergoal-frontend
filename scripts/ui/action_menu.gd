@@ -59,6 +59,42 @@ func _get_actions(player: Dictionary) -> Array:
 	var _raw_marker = player.get("marking")
 	var marker_id:    String = _raw_marker if _raw_marker != null else ""
 	var turn:         String = _state.get("turn", "home")
+	var side_key:     String = "home" if turn == "home" else "away"
+
+	# --- Desmarque pendiente: el portador sólo puede hacer el pase forzado ---
+	var _raw_unmark = _state.get("pending_unmark_receiver_id")
+	var pending_unmark_id: String = "" if _raw_unmark == null else str(_raw_unmark)
+	if pending_unmark_id != "":
+		if has_ball:
+			# Mostrar sólo el pase obligatorio al jugador que se desmarcó
+			var passer_marked: bool = marking_type == "man_to_man"
+			for tm in _state.get(side_key, {}).get("players", []):
+				if tm["id"] != pending_unmark_id:
+					continue
+				var dist: int = max(abs(tm["row"] - row), abs(tm["col"] - col))
+				var ptype: String
+				var plabel: String
+				if dist <= 1:
+					var receiver_marked: bool = tm.get("marking_type", "free") == "man_to_man"
+					if passer_marked or receiver_marked:
+						ptype  = "pass_short"
+						plabel = "-> Corto"
+					else:
+						ptype  = "pass_direct"
+						plabel = "-> Directo"
+				elif dist <= 3:
+					ptype  = "pass_long"
+					plabel = "-> Largo"
+				else:
+					continue
+				var tm_name: String = tm.get("name", tm["id"]).split(" ")[-1]
+				actions.append(_action("[D] Pase obl. %s %s" % [plabel, tm_name], {
+					"action_type": ptype,
+					"player_id": pid,
+					"target_player_id": tm["id"],
+				}))
+		# Ningún otro jugador puede actuar mientras hay un desmarque pendiente
+		return actions
 
 	if has_ball:
 		# --- Remate cercano (zona RM) ---
@@ -75,25 +111,36 @@ func _get_actions(player: Dictionary) -> Array:
 				{"action_type": "shoot_far", "player_id": pid}))
 
 		# --- Regate: disponible si hay marcaje (al hombre o en zona) ---
+		# Se muestra una opción por cada casilla adyacente válida.
 		if marking_type != "free" and marker_id != "":
 			var marker = _find_player_by_id(marker_id)
 			var marker_name: String = marker.get("name", marker_id).split(" ")[-1] if not marker.is_empty() else marker_id
-			var dribble_label: String
-			if marking_type == "man_to_man":
-				dribble_label = "[RG] Regatear vs %s (2 dados)" % marker_name
-			else:
-				dribble_label = "[RG] Regatear en zona (1 dado)"
-			actions.append(_action(dribble_label, {
-				"action_type": "dribble",
-				"player_id": pid,
-				"target_player_id": marker_id,
-			}))
+			var dice_label: String = "(2 dados)" if marking_type == "man_to_man" else "(1 dado)"
+			for nb in _get_neighbors(row, col):
+				var arr: String = _dir_label(nb[0] - row, nb[1] - col)
+				actions.append(_action("[RG] %s vs %s %s" % [arr, marker_name, dice_label], {
+					"action_type": "dribble",
+					"player_id": pid,
+					"target_player_id": marker_id,
+					"target_position": [nb[0], nb[1]],
+				}))
+
+			# --- Velocidad: disponible si el portador tiene V > 0 ---
+			var v_attr: int = player.get("v", 0)
+			if v_attr > 0:
+				for nb in _get_neighbors(row, col):
+					var arr: String = _dir_label(nb[0] - row, nb[1] - col)
+					actions.append(_action("[V] %s vs %s %s" % [arr, marker_name, dice_label], {
+						"action_type": "sprint",
+						"player_id": pid,
+						"target_player_id": marker_id,
+						"target_position": [nb[0], nb[1]],
+					}))
 
 		# --- Pases a companeros ---
 		var passer_marked: bool = marking_type == "man_to_man"
 		var in_pa_zone: bool = (col == 0 or col == 4) or \
 			((row == 1 or row == 4) and (col == 1 or col == 3))
-		var side_key: String = "home" if turn == "home" else "away"
 		for tm in _state.get(side_key, {}).get("players", []):
 			if tm["id"] == pid:
 				continue
@@ -135,16 +182,19 @@ func _get_actions(player: Dictionary) -> Array:
 					"target_player_id": tm["id"],
 				}))
 
-		# --- Mover con balon (cualquier celda adyacente) ---
-		for nb in _get_neighbors(row, col):
-			var arr: String = _dir_label(nb[0] - row, nb[1] - col)
-			actions.append(_action("[>>] %s" % arr, {
-				"action_type": "move_with_ball",
-				"player_id": pid,
-				"target_position": [nb[0], nb[1]],
-			}))
+		# --- Mover con balon (solo si el jugador está libre de marcaje o tiene avance libre) ---
+		# Con marcaje (al hombre o en zona) es obligatorio intentar el regate primero,
+		# salvo el avance libre concedido tras un robo fallido del rival.
+		var pending_free: bool = has_ball and _state.get("pending_free_advance", false)
+		if marking_type == "free" or pending_free:
+			for nb in _get_neighbors(row, col):
+				var arr: String = _dir_label(nb[0] - row, nb[1] - col)
+				actions.append(_action("[>>] %s" % arr, {
+					"action_type": "move_with_ball",
+					"player_id": pid,
+					"target_position": [nb[0], nb[1]],
+				}))
 	else:
-		var side_key: String = "home" if turn == "home" else "away"
 		var opp_key:  String = "away" if turn == "home" else "home"
 
 		# --- Robo de balon ---
@@ -158,6 +208,8 @@ func _get_actions(player: Dictionary) -> Array:
 				break
 
 		if is_current_team:
+			var _raw_cooldown = _state.get("steal_cooldown_player_id")
+			var cooldown_id: String = "" if _raw_cooldown == null else str(_raw_cooldown)
 			var carrier: Dictionary = {}
 			for p in _state.get(opp_key, {}).get("players", []):
 				if p.get("has_ball", false):
@@ -180,13 +232,22 @@ func _get_actions(player: Dictionary) -> Array:
 								blocked = true
 								break
 
-					if not blocked:
+					if not blocked and cooldown_id != pid:
 						var carrier_name: String = carrier.get("name", carrier["id"]).split(" ")[-1]
 						actions.append(_action("[RB] Robar a %s" % carrier_name, {
 							"action_type": "steal",
 							"player_id": pid,
 							"target_player_id": carrier["id"],
 						}))
+
+		# --- Desmarque: disponible si el jugador del equipo actual tiene D > 0 y está marcado al hombre ---
+		if is_current_team and marking_type == "man_to_man":
+			var d_attr: int = player.get("d", 0)
+			if d_attr > 0:
+				actions.append(_action("[D] Desmarcar (%d) (2 dados)" % d_attr, {
+					"action_type": "unmark",
+					"player_id": pid,
+				}))
 
 		# --- Mover sin balon (cualquier celda adyacente) ---
 		for nb in _get_neighbors(row, col):

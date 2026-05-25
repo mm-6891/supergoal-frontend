@@ -5,6 +5,7 @@ extends Node2D
 @onready var _board       = $Board
 @onready var _hud         = $HUDLayer/HUD
 @onready var _action_menu = $ActionMenuLayer/ActionMenu
+@onready var _dice        = $DiceOverlayLayer/DiceOverlay
 
 var _api        = null
 var _game_id:    String     = ""
@@ -140,18 +141,38 @@ func _on_action_chosen(action: Dictionary) -> void:
 	if not _check(response, "game"):
 		push_error("Error al ejecutar accion")
 		return
-	_hud.show_result(response.get("human_result", {}), "Tu: ")
+
+	var game_summary: Dictionary = response.get("game", {})
+	var human_result: Dictionary = response.get("human_result", {})
+
+	# 1. Dados de la acción humana ANTES de actualizar el tablero
+	if human_result.get("total", 0) > 0:
+		_dice.play(human_result)
+		await _dice.animation_finished
+
+	_hud.show_result(human_result, "Tu: ")
+
+	# 2. Refrescar tablero tras resolver la acción del humano
+	if not game_summary.get("finished", false):
+		await _refresh_board()
+
+	# 3. Acciones de la CPU
 	var cpu_results = response.get("cpu_results", [])
 	if cpu_results is Array and cpu_results.size() > 0:
-		await get_tree().create_timer(1.0).timeout
 		for cpu_result in cpu_results:
+			if cpu_result.get("total", 0) > 0:
+				_dice.play(cpu_result)
+				await _dice.animation_finished
 			_hud.append_cpu_result(cpu_result)
-	var game_summary = response.get("game", {})
+
+	# 4. Despeje automático del portero HOME (tras parada a un disparo CPU)
+	var home_gk_clearance = response.get("home_gk_clearance")
+	if home_gk_clearance != null and home_gk_clearance is Dictionary and not home_gk_clearance.is_empty():
+		_hud.append_result(home_gk_clearance, "GK: ")
+
 	if game_summary.get("finished", false):
 		_hud.update_from_state(game_summary)
 		return
-	await get_tree().create_timer(1.2).timeout
-	await _refresh_board()
 
 
 static func _check(data, key) -> bool:

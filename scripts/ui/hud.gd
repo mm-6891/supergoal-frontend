@@ -169,6 +169,17 @@ func append_cpu_result(result: Dictionary) -> void:
 	_add_to_history(line)
 
 
+func append_result(result: Dictionary, prefix: String = "") -> void:
+	if result == null or result.is_empty():
+		return
+	var line: String = "%s%s" % [prefix, result.get("description", "")]
+	if _result.text == "":
+		_result.text = line
+	else:
+		_result.text = _result.text + "\n" + line
+	_add_to_history(line)
+
+
 func clear_result() -> void:
 	_result.text = ""
 

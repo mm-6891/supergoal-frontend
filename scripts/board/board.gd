@@ -9,7 +9,7 @@ class_name Board
 
 const ROWS = 6          # backend rows (0-5)
 const COLS = 5          # backend cols (0-4)
-const CELL_SIZE = 105
+const CELL_SIZE = 155
 const GK_STRIP_W = 50   # width of goal strip on left/right sides
 const GRID_X = GK_STRIP_W  # x-pixel where the 6x5 grid starts
 
@@ -167,19 +167,18 @@ func _draw() -> void:
 				var cc := int(parts[1])
 				var crect := Rect2(GRID_X + cr * CELL_SIZE, cc * CELL_SIZE, CELL_SIZE, CELL_SIZE)
 				draw_rect(crect, C_CONTESTED)
-				draw_rect(crect, C_MARK_MAN, false, 2.0)
+				draw_rect(crect, Color(1, 1, 1, 0.35), false, 1.5)  # borde neutro: casilla compartida
 
-	# Ball indicator
+	# Locate ball position (drawn after mini-cards so it appears on top)
+	var _ball_row: int = _state.get("ball_row", 2)
+	var _ball_col: int = _state.get("ball_col", 2)
 	if not _state.is_empty():
-		var br: int = _state.get("ball_row", 2)
-		var bc: int = _state.get("ball_col", 2)
 		for p in _state.get("home", {}).get("players", []):
 			if p.get("has_ball", false):
-				br = p["row"]; bc = p["col"]
+				_ball_row = p["row"]; _ball_col = p["col"]
 		for p in _state.get("away", {}).get("players", []):
 			if p.get("has_ball", false):
-				br = p["row"]; bc = p["col"]
-		_draw_soccer_ball(_cell_center(br, bc), 12.0)
+				_ball_row = p["row"]; _ball_col = p["col"]
 
 	# Column number labels (top margin)
 	for c in range(COLS):
@@ -187,23 +186,95 @@ func _draw() -> void:
 			Vector2(GRID_X - 24, c * CELL_SIZE + CELL_SIZE / 2.0 + 6),
 			str(c), HORIZONTAL_ALIGNMENT_RIGHT, -1, 14, Color(1, 1, 1, 0.7))
 
-	# Player names drawn along the direction of play
-	# HOME attacks right → text reads left-to-right (no rotation)
-	# AWAY attacks left  → text reads right-to-left (180° rotation, or just mirrored)
+	# Mini-cards: gradient background + initial + band + border
 	for d in _player_draws:
-		var ctr: Vector2 = d["center"]
-		var surname: String = d["name"]
-		var fs := 10
-		var tw: float = font.get_string_size(surname, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-		if d["team"] == "home":
-			# rotate 90° CW so text reads top-to-bottom inside the cell
-			draw_set_transform(ctr, PI / 2.0, Vector2.ONE)
+		var pos: Vector2 = d["pos"]
+		var sz:  Vector2 = d["size"]
+		var team: String = d["team"]
+		var base: Color  = C_HOME if team == "home" else C_AWAY
+		var surname: String    = d["name"]
+		var mtype: String      = d["marking_type"]
+		var has_ball: bool     = d["has_ball"]
+		var is_selected: bool  = d["is_selected"]
+		var slot: int          = d["slot"]
+		var pc_v: int          = d.get("pc", 0)
+
+		# 1. Gradient background
+		var c_top := base.darkened(0.52)
+		var c_bot := base.darkened(0.76)
+		draw_polygon(
+			PackedVector2Array([pos, pos + Vector2(sz.x, 0), pos + sz, pos + Vector2(0, sz.y)]),
+			PackedColorArray([c_top, c_top, c_bot, c_bot])
+		)
+
+		# 2. Large decorative initial (carrier card, slot 0 / single player)
+		if slot == 0:
+			var init_fs: int  = int(sz.y * 0.68)
+			var init_str: String = surname.substr(0, 1)
+			var init_w: float = font.get_string_size(init_str, HORIZONTAL_ALIGNMENT_LEFT, -1, init_fs).x
+			draw_string(font, pos + Vector2(sz.x / 2.0 - init_w / 2.0, sz.y * 0.72),
+					init_str, HORIZONTAL_ALIGNMENT_LEFT, -1, init_fs, Color(1, 1, 1, 0.10))
+
+		# 3. Bottom band with surname (carrier only); badge shows centered initial instead
+		if slot == 0:
+			var band_h: float = max(17.0, sz.y * 0.22)
+			draw_rect(Rect2(pos.x, pos.y + sz.y - band_h, sz.x, band_h), Color(0, 0, 0, 0.58))
+			var name_fs: int  = max(7, int(band_h * 0.55))
+			var name_w: float = font.get_string_size(surname, HORIZONTAL_ALIGNMENT_LEFT, -1, name_fs).x
+			var name_x: float = pos.x + sz.x / 2.0 - name_w / 2.0
+			var name_y: float = pos.y + sz.y - band_h * 0.22
+			draw_string(font, Vector2(name_x, name_y), surname,
+					HORIZONTAL_ALIGNMENT_LEFT, -1, name_fs, Color.WHITE)
 		else:
-			# rotate 90° CCW so text reads bottom-to-top inside the cell
-			draw_set_transform(ctr, -PI / 2.0, Vector2.ONE)
-		draw_string(font, Vector2(-tw / 2.0, fs / 2.0), surname,
-			HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color.WHITE)
-		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+			# Badge: show initial prominently centered
+			var badge_fs: int = int(sz.y * 0.62)
+			var badge_init: String = surname.substr(0, 1)
+			var badge_iw: float = font.get_string_size(badge_init, HORIZONTAL_ALIGNMENT_LEFT, -1, badge_fs).x
+			draw_string(font, pos + Vector2(sz.x / 2.0 - badge_iw / 2.0, sz.y * 0.72),
+					badge_init, HORIZONTAL_ALIGNMENT_LEFT, -1, badge_fs, Color(1, 1, 1, 0.85))
+
+		# 4. PC stat in top-right (if ball carrier)
+		if has_ball and pc_v > 0:
+			var pc_str := "PC%d" % pc_v
+			var pc_w: float = font.get_string_size(pc_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 8).x
+			draw_string(font, pos + Vector2(sz.x - pc_w - 3, 11),
+					pc_str, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, Color(1.0, 0.85, 0.25, 0.95))
+
+		# 5. Marking label centered at bottom of badge (defender, slot 1)
+		if slot == 1 and mtype != "free":
+			var mark_lbl: String = "M2M" if mtype == "man_to_man" else "ZN"
+			var mark_col: Color  = C_MARK_MAN if mtype == "man_to_man" else C_MARK_ZONE
+			var mk_w: float = font.get_string_size(mark_lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 8).x
+			draw_string(font, pos + Vector2(sz.x / 2.0 - mk_w / 2.0, sz.y - 3),
+					mark_lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, mark_col)
+
+		# 6. Border
+		var b_color: Color
+		var b_width: float
+		if has_ball:
+			b_color = C_BALL;     b_width = 3.5
+		elif is_selected:
+			b_color = C_SELECTED; b_width = 3.0
+		elif mtype == "man_to_man":
+			b_color = C_MARK_MAN; b_width = 3.0
+		elif mtype == "zone":
+			b_color = C_MARK_ZONE; b_width = 2.5
+		else:
+			b_color = Color(1, 1, 1, 0.75); b_width = 2.0
+		draw_rect(Rect2(pos, sz), b_color, false, b_width)
+
+	# Ball drawn last so it appears on top of all mini-cards
+	if not _state.is_empty():
+		var home_gk_ball: bool = _state.get("home", {}).get("goalkeeper_has_ball", false)
+		var away_gk_ball: bool = _state.get("away", {}).get("goalkeeper_has_ball", false)
+		if home_gk_ball:
+			# Ball sits in the centre of the HOME GK strip (left side)
+			_draw_soccer_ball(Vector2(GK_STRIP_W / 2.0, COLS * CELL_SIZE / 2.0), 12.0)
+		elif away_gk_ball:
+			# Ball sits in the centre of the AWAY GK strip (right side)
+			_draw_soccer_ball(Vector2(GRID_X + ROWS * CELL_SIZE + GK_STRIP_W / 2.0, COLS * CELL_SIZE / 2.0), 12.0)
+		else:
+			_draw_soccer_ball(_cell_center(_ball_row, _ball_col), 12.0)
 
 
 # ---------------------------------------------------------------------------
@@ -226,22 +297,75 @@ func _rebuild_players() -> void:
 	if away_gk != "":
 		_add_goalkeeper_button(away_gk, "away")
 
-	# Count occupants per cell to assign slot (0=top, 1=bottom)
-	var cell_counts: Dictionary = {}
-
 	var all_players: Array = []
 	for p in _state["home"]["players"]:
 		all_players.append({"data": p, "team": "home"})
 	for p in _state["away"]["players"]:
 		all_players.append({"data": p, "team": "away"})
 
+	# Per-cell ordering: ball carrier → BACK (slot 0), defender → FRONT (slot 1, floating)
+	var cell_order: Dictionary = {}
 	for entry in all_players:
 		var p: Dictionary = entry["data"]
 		var key := "%d,%d" % [p["row"], p["col"]]
-		var slot: int = cell_counts.get(key, 0)
-		cell_counts[key] = slot + 1
-		var color := C_HOME if entry["team"] == "home" else C_AWAY
-		_add_player_button(p, color, slot, entry["team"])
+		if not cell_order.has(key):
+			cell_order[key] = []
+		if p.get("has_ball", false):
+			cell_order[key].insert(0, entry)  # carrier → slot 0, behind, full card
+		else:
+			cell_order[key].append(entry)     # defender → slot 1, on top, badge
+
+	for key in cell_order:
+		var entries: Array = cell_order[key]
+		var total: int = entries.size()
+		for slot in range(total):
+			_add_mini_card(entries[slot]["data"], slot, total, entries[slot]["team"])
+
+
+func _add_mini_card(player: Dictionary, slot: int, total: int, team: String) -> void:
+	const MARGIN := 4
+
+	var cell_x: int = GRID_X + player["row"] * CELL_SIZE
+	var cell_y: int = player["col"] * CELL_SIZE
+	var btn_x: int  = cell_x + MARGIN
+	var btn_y: int  = cell_y + MARGIN
+	var btn_w: int  = CELL_SIZE - MARGIN * 2
+	var btn_h: int  = CELL_SIZE - MARGIN * 2
+
+	if total > 1 and slot == 1:
+		# Defender badge: small 60x60 at top-left corner, drawn on top of carrier
+		btn_w = 60
+		btn_h = 60
+
+	# Transparent button — only for click detection; visuals drawn in _draw()
+	var btn := Button.new()
+	btn.position = Vector2(btn_x, btn_y)
+	btn.size     = Vector2(btn_w, btn_h)
+	btn.flat     = true
+	btn.z_index  = slot
+	var transparent := StyleBoxEmpty.new()
+	btn.add_theme_stylebox_override("normal",   transparent)
+	btn.add_theme_stylebox_override("hover",    transparent)
+	btn.add_theme_stylebox_override("pressed",  transparent)
+	btn.add_theme_stylebox_override("disabled", transparent)
+
+	var parts: Array = player.get("name", player["id"]).split(" ")
+	_player_draws.append({
+		"pos":          Vector2(btn_x, btn_y),
+		"size":         Vector2(btn_w, btn_h),
+		"center":       Vector2(btn_x + btn_w / 2.0, btn_y + btn_h / 2.0),
+		"team":         team,
+		"name":         parts[-1],
+		"pc":           player.get("pc", 0),
+		"has_ball":     player.get("has_ball", false),
+		"is_selected":  player["id"] == _selected_id,
+		"marking_type": player.get("marking_type", "free"),
+		"slot":         slot,
+	})
+
+	var pid: String = player["id"]
+	btn.pressed.connect(func(): player_clicked.emit(pid))
+	add_child(btn)
 
 
 func _add_player_button(player: Dictionary, color: Color, slot: int, team: String) -> void:
